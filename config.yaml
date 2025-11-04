@@ -33,3 +33,9 @@ menu:
 params:
   description: "A musician collective in Phoenix, AZ, specializing in bluegrass, folk, and old time music"
   tagline: "Bluegrass, Folk & Old Time Music in Phoenix, AZ"
+  # Optional SEO parameters:
+  # keywords: "bluegrass, folk music, old time music, Phoenix, Arizona"
+  # author: "AZ Acoustic Collective"
+  # ogImage: "/images/default-og-image.jpg"  # Default Open Graph image for social sharing
+  # twitterSite: "@azacoustic"  # Twitter handle (without @)
+  # twitterCreator: "@azacoustic"  # Twitter creator handle (without @)
