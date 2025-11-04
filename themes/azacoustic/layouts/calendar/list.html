@@ -1,0 +1,669 @@
+{{ define "main" }}
+<div class="calendar-page">
+  
+  {{/* Collect all pages with eventDate - try multiple methods */}}
+  {{ $events := slice }}
+  
+  {{/* Method 1: Direct iteration through all pages */}}
+  {{ range .Site.Pages }}
+    {{ if and (ne .Params.eventDate nil) (ne .Params.eventDate "") (eq .Draft false) }}
+      {{ if or (eq .Section "jams") (eq .Section "events") }}
+        {{ $events = $events | append . }}
+      {{ end }}
+    {{ end }}
+  {{ end }}
+  
+  {{/* Method 2: If no events found, try RegularPages and check all sections */}}
+  {{ if eq (len $events) 0 }}
+    {{ range .Site.RegularPages }}
+      {{ if and (ne .Params.eventDate nil) (ne .Params.eventDate "") (eq .Draft false) }}
+        {{ if or (eq .Section "jams") (eq .Section "events") }}
+          {{ $events = $events | append . }}
+        {{ end }}
+      {{ end }}
+    {{ end }}
+  {{ end }}
+  
+  {{/* Method 3: If still no events, try without section restriction */}}
+  {{ if eq (len $events) 0 }}
+    {{ range .Site.RegularPages }}
+      {{ if and (ne .Params.eventDate nil) (ne .Params.eventDate "") (eq .Draft false) }}
+        {{ $events = $events | append . }}
+      {{ end }}
+    {{ end }}
+  {{ end }}
+  
+  {{ $eventsData := slice }}
+  {{ range $events }}
+    {{ $eventData := dict "title" .Title "url" .Permalink "description" (.Params.description | default "") }}
+    {{ if .Params.recurrence }}
+      {{/* For recurrent events, use startDate and endDate */}}
+      {{ $eventData = merge $eventData (dict "recurrence" .Params.recurrence) }}
+      {{ if .Params.startDate }}
+        {{ $eventData = merge $eventData (dict "date" .Params.startDate "startDate" .Params.startDate) }}
+      {{ else }}
+        {{/* Fallback to eventDate if startDate not set */}}
+        {{ $eventData = merge $eventData (dict "date" .Params.eventDate) }}
+      {{ end }}
+      {{ if .Params.endDate }}
+        {{ $eventData = merge $eventData (dict "endDate" .Params.endDate) }}
+      {{ end }}
+      {{ if .Params.recurrenceDay }}
+        {{ $eventData = merge $eventData (dict "recurrenceDay" .Params.recurrenceDay) }}
+      {{ end }}
+    {{ else }}
+      {{/* For one-off events, use eventDate */}}
+      {{ $eventData = merge $eventData (dict "date" .Params.eventDate) }}
+    {{ end }}
+    {{ if .Params.cancelledDates }}
+      {{ $eventData = merge $eventData (dict "cancelledDates" .Params.cancelledDates) }}
+    {{ end }}
+    {{ $eventsData = $eventsData | append $eventData }}
+  {{ end }}
+  
+  
+  <div class="calendar-controls">
+    <button id="prev-month" class="btn btn-secondary">← Previous</button>
+    <h2 id="current-month-year"></h2>
+    <button id="next-month" class="btn btn-secondary">Next →</button>
+  </div>
+  
+  <div class="calendar-export">
+    <button id="export-ical" class="btn btn-primary">Export iCal</button>
+  </div>
+  
+  <div id="calendar-grid" class="calendar-grid"></div>
+  
+  <script>
+    (function() {
+      'use strict';
+      
+      // ============================================================================
+      // Calendar Configuration
+      // ============================================================================
+      const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'];
+      const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const DAY_NAMES_ICAL = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+      const DEFAULT_RECURRENCE_YEARS = 2;
+      
+      // ============================================================================
+      // Data Management
+      // ============================================================================
+      const rawEventsData = {{ $eventsData | jsonify }};
+      
+      // Parse JSON string if needed
+      let eventsData;
+      if (typeof rawEventsData === 'string') {
+        try {
+          eventsData = JSON.parse(rawEventsData);
+        } catch (e) {
+          eventsData = [];
+        }
+      } else if (Array.isArray(rawEventsData)) {
+        eventsData = rawEventsData;
+      } else {
+        eventsData = [];
+      }
+      
+      let currentViewDate = new Date();
+      
+      // ============================================================================
+      // Date Utilities
+      // ============================================================================
+      const DateUtils = {
+        // Format date as YYYY-MM-DD
+        formatDateString(date) {
+          const year = date.getFullYear();
+          const month = String(date.getMonth() + 1).padStart(2, '0');
+          const day = String(date.getDate()).padStart(2, '0');
+          return `${year}-${month}-${day}`;
+        },
+        
+        // Parse date string (YYYY-MM-DD) to Date object
+        // Uses local time to avoid timezone issues
+        parseDateString(dateStr) {
+          const parts = dateStr.split('-');
+          if (parts.length === 3) {
+            const year = parseInt(parts[0], 10);
+            const month = parseInt(parts[1], 10) - 1; // Month is 0-indexed
+            const day = parseInt(parts[2], 10);
+            return new Date(year, month, day, 0, 0, 0, 0);
+          }
+          // Fallback to ISO parsing
+          return new Date(dateStr + 'T00:00:00');
+        },
+        
+        // Check if two dates are the same day
+        isSameDay(date1, date2) {
+          return date1.getFullYear() === date2.getFullYear() &&
+                 date1.getMonth() === date2.getMonth() &&
+                 date1.getDate() === date2.getDate();
+        },
+        
+        // Get start of day
+        startOfDay(date) {
+          const d = new Date(date);
+          d.setHours(0, 0, 0, 0);
+          return d;
+        },
+        
+        // Get end of day
+        endOfDay(date) {
+          const d = new Date(date);
+          d.setHours(23, 59, 59, 999);
+          return d;
+        }
+      };
+      
+      // ============================================================================
+      // Event Processing
+      // ============================================================================
+      const EventProcessor = {
+        // Check if a date is in the cancelled dates list
+        isDateCancelled(event, dateStr) {
+          if (!event.cancelledDates || !Array.isArray(event.cancelledDates)) {
+            return false;
+          }
+          return event.cancelledDates.includes(dateStr);
+        },
+        
+        // Generate all occurrences for a recurring event within a date range
+        generateRecurrences(event, startDate, endDate) {
+          const occurrences = [];
+          
+          if (!event.recurrence) {
+            return occurrences;
+          }
+          
+          // Use startDate for recurrent events, fallback to event.date for backwards compatibility
+          const eventStartDate = event.startDate 
+            ? DateUtils.parseDateString(event.startDate)
+            : DateUtils.parseDateString(event.date);
+          
+          // Use endDate for recurrent events (required), fallback to recurrenceEndDate for backwards compatibility
+          let eventEndDate = null;
+          if (event.endDate) {
+            eventEndDate = DateUtils.endOfDay(DateUtils.parseDateString(event.endDate));
+          } else if (event.recurrenceEndDate) {
+            eventEndDate = DateUtils.endOfDay(DateUtils.parseDateString(event.recurrenceEndDate));
+          }
+          
+          // Require endDate for recurrent events - throw error if not provided
+          if (!eventEndDate) {
+            throw new Error(`Recurrent event "${event.title}" requires an endDate field`);
+          }
+          
+          const viewStart = DateUtils.startOfDay(startDate);
+          const viewEnd = DateUtils.endOfDay(endDate);
+          const effectiveEnd = eventEndDate ? 
+            (eventEndDate < viewEnd ? eventEndDate : viewEnd) : viewEnd;
+          
+          let current = new Date(eventStartDate);
+          
+          switch (event.recurrence) {
+            case 'daily':
+              while (current <= effectiveEnd) {
+                if (current >= viewStart) {
+                  occurrences.push(new Date(current));
+                }
+                current.setDate(current.getDate() + 1);
+              }
+              break;
+              
+            case 'weekly':
+              const targetDay = event.recurrenceDay !== undefined 
+                ? parseInt(event.recurrenceDay) 
+                : eventStartDate.getDay();
+              
+              // Find the first occurrence date in or after the view range
+              let checkDate = new Date(eventStartDate);
+              
+              // If event starts before view, find first occurrence in view
+        if (checkDate < viewStart) {
+                checkDate = new Date(viewStart);
+                // Find the first occurrence of the target day from viewStart
+                const daysUntilTarget = (targetDay - checkDate.getDay() + 7) % 7;
+          checkDate.setDate(checkDate.getDate() + daysUntilTarget);
+                
+                // If we haven't reached the event start date yet, move to next week
+                if (checkDate < eventStartDate) {
+            checkDate.setDate(checkDate.getDate() + 7);
+          }
+              } else {
+                // Event starts within view - ensure we're on the right day
+                const currentDay = checkDate.getDay();
+                if (currentDay !== targetDay) {
+                  const daysUntilTarget = (targetDay - currentDay + 7) % 7;
+                  checkDate.setDate(checkDate.getDate() + daysUntilTarget);
+                }
+              }
+              
+              // Generate all occurrences
+              while (checkDate <= effectiveEnd && checkDate >= eventStartDate && checkDate <= eventEndDate) {
+                if (checkDate >= viewStart) {
+            occurrences.push(new Date(checkDate));
+          }
+          checkDate.setDate(checkDate.getDate() + 7);
+        }
+              break;
+              
+            case 'monthly':
+              while (current <= effectiveEnd) {
+                if (current >= viewStart) {
+                  occurrences.push(new Date(current));
+                }
+                current.setMonth(current.getMonth() + 1);
+              }
+              break;
+              
+            case 'yearly':
+              while (current <= effectiveEnd) {
+                if (current >= viewStart) {
+                  occurrences.push(new Date(current));
+                }
+                current.setFullYear(current.getFullYear() + 1);
+              }
+              break;
+      }
+      
+      return occurrences;
+        },
+        
+        // Get all events for a specific date
+        getEventsForDate(dateStr, year, month) {
+          const date = DateUtils.parseDateString(dateStr);
+          const viewStart = DateUtils.startOfDay(new Date(year, month, 1));
+          const viewEnd = DateUtils.endOfDay(new Date(year, month + 1, 0));
+          
+          const activeEvents = [];
+          const cancelledEvents = [];
+          
+          if (!Array.isArray(eventsData)) {
+            return { active: activeEvents, cancelled: cancelledEvents };
+          }
+          
+          eventsData.forEach(event => {
+            if (!event.date) {
+              return; // Skip events without a date
+            }
+            
+            const eventDate = DateUtils.parseDateString(event.date);
+            const isCancelled = this.isDateCancelled(event, dateStr);
+        
+        if (event.recurrence) {
+              // Recurring event
+              const occurrences = this.generateRecurrences(event, viewStart, viewEnd);
+              const dateMatch = occurrences.some(occ => {
+                return DateUtils.isSameDay(occ, date);
+              });
+              
+              if (dateMatch) {
+                const eventInfo = {
+                title: event.title,
+                url: event.url,
+                  description: event.description || '',
+                isRecurring: true,
+                  isCancelled: isCancelled
+                };
+                
+                if (isCancelled) {
+                  cancelledEvents.push(eventInfo);
+                } else {
+                  activeEvents.push(eventInfo);
+                }
+              }
+        } else {
+              // One-off event
+              if (DateUtils.isSameDay(eventDate, date)) {
+                const eventInfo = {
+              title: event.title,
+              url: event.url,
+                  description: event.description || '',
+              isRecurring: false,
+                  isCancelled: isCancelled
+                };
+                
+                if (isCancelled) {
+                  cancelledEvents.push(eventInfo);
+                } else {
+                  activeEvents.push(eventInfo);
+                }
+          }
+        }
+      });
+      
+          return {
+            active: activeEvents,
+            cancelled: cancelledEvents
+          };
+        }
+      };
+      
+      // ============================================================================
+      // Calendar Rendering
+      // ============================================================================
+      const CalendarRenderer = {
+        // Render the calendar grid
+        render() {
+          const year = currentViewDate.getFullYear();
+          const month = currentViewDate.getMonth();
+          
+          this.updateMonthYearDisplay(year, month);
+          this.renderGrid(year, month);
+        },
+        
+        // Update month/year header
+        updateMonthYearDisplay(year, month) {
+          const monthYearEl = document.getElementById('current-month-year');
+          monthYearEl.textContent = `${MONTH_NAMES[month]} ${year}`;
+        },
+        
+        // Render the calendar grid
+        renderGrid(year, month) {
+      const grid = document.getElementById('calendar-grid');
+          if (!grid) {
+            return;
+          }
+          
+      grid.innerHTML = '';
+      
+      // Add day headers
+          DAY_NAMES.forEach(day => {
+        const header = document.createElement('div');
+        header.className = 'calendar-day-header';
+        header.textContent = day;
+        grid.appendChild(header);
+      });
+          
+          // Get first day of month and number of days
+          const firstDay = new Date(year, month, 1).getDay();
+          const daysInMonth = new Date(year, month + 1, 0).getDate();
+      
+      // Add empty cells for days before month starts
+      for (let i = 0; i < firstDay; i++) {
+        const empty = document.createElement('div');
+        empty.className = 'calendar-day empty';
+        grid.appendChild(empty);
+      }
+      
+      // Add days of month
+      const today = new Date();
+      const isCurrentMonth = today.getFullYear() === year && today.getMonth() === month;
+      
+      for (let day = 1; day <= daysInMonth; day++) {
+            const dateStr = DateUtils.formatDateString(new Date(year, month, day));
+            const dayCell = this.createDayCell(dateStr, day, isCurrentMonth && day === today.getDate(), year, month);
+            grid.appendChild(dayCell);
+          }
+        },
+        
+        // Create a single day cell
+        createDayCell(dateStr, dayNumber, isToday, year, month) {
+        const dayCell = document.createElement('div');
+        dayCell.className = 'calendar-day';
+        dayCell.dataset.date = dateStr;
+        
+          if (isToday) {
+          dayCell.classList.add('today');
+        }
+        
+          // Day number
+          const dayNumberEl = document.createElement('div');
+          dayNumberEl.className = 'day-number';
+          dayNumberEl.textContent = dayNumber;
+          dayCell.appendChild(dayNumberEl);
+          
+          // Get events for this day
+          const dayEvents = EventProcessor.getEventsForDate(dateStr, year, month);
+          
+          // Create events container if there are any events
+          if (dayEvents.active.length > 0 || dayEvents.cancelled.length > 0) {
+            const eventsContainer = document.createElement('div');
+            eventsContainer.className = 'day-events';
+            
+            // Render active events
+            dayEvents.active.forEach(event => {
+              eventsContainer.appendChild(this.createEventElement(event, false));
+            });
+            
+            // Render cancelled events (with X mark)
+            dayEvents.cancelled.forEach(event => {
+              eventsContainer.appendChild(this.createEventElement(event, true));
+            });
+            
+            dayCell.appendChild(eventsContainer);
+          }
+          
+          return dayCell;
+        },
+        
+        // Create an event element
+        createEventElement(event, isCancelled) {
+          const eventEl = document.createElement(isCancelled ? 'div' : 'a');
+          
+          if (!isCancelled) {
+            eventEl.href = event.url;
+          }
+          
+            eventEl.className = 'calendar-event';
+            if (event.isRecurring) {
+              eventEl.classList.add('recurring');
+            }
+          if (isCancelled) {
+            eventEl.classList.add('cancelled');
+          }
+          
+          // Event title
+            const titleSpan = document.createElement('span');
+            titleSpan.textContent = event.title;
+            eventEl.appendChild(titleSpan);
+          
+          // Add X mark for cancelled events
+          if (isCancelled) {
+            const xMark = document.createElement('span');
+            xMark.className = 'cancel-x';
+            xMark.textContent = ' ✕';
+            eventEl.appendChild(xMark);
+          }
+          
+          // Tooltip
+          let tooltip = event.title;
+          if (isCancelled) {
+            tooltip += ' (Cancelled)';
+          }
+          if (event.description) {
+            tooltip += ': ' + event.description;
+          }
+          eventEl.title = tooltip;
+          
+          return eventEl;
+        }
+      };
+      
+      // ============================================================================
+      // iCal Export
+      // ============================================================================
+      const ICalExporter = {
+        // Escape text for iCal format
+        escapeIcal(text) {
+        if (!text) return '';
+        return text
+          .replace(/\\/g, '\\\\')
+          .replace(/;/g, '\\;')
+          .replace(/,/g, '\\,')
+          .replace(/\n/g, '\\n');
+        },
+        
+        // Format date for iCal
+        formatIcalDate(date) {
+          return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+        },
+        
+        // Generate RRULE for recurring event
+        generateRRule(event, startDate) {
+          let rrule = '';
+          
+          switch (event.recurrence) {
+            case 'daily':
+              rrule = 'FREQ=DAILY';
+              break;
+            case 'weekly':
+              const dayOfWeek = event.recurrenceDay !== undefined 
+                ? parseInt(event.recurrenceDay) 
+                : startDate.getDay();
+              rrule = `FREQ=WEEKLY;BYDAY=${DAY_NAMES_ICAL[dayOfWeek]}`;
+              break;
+            case 'monthly':
+              rrule = 'FREQ=MONTHLY';
+              break;
+            case 'yearly':
+              rrule = 'FREQ=YEARLY';
+              break;
+          }
+          
+          // Add UNTIL clause - use endDate (required for recurrent events), fallback to recurrenceEndDate for backwards compatibility
+          let untilDate = null;
+          if (event.endDate) {
+            untilDate = DateUtils.endOfDay(DateUtils.parseDateString(event.endDate));
+          } else if (event.recurrenceEndDate) {
+            untilDate = DateUtils.endOfDay(DateUtils.parseDateString(event.recurrenceEndDate));
+          } else {
+            // This shouldn't happen as we validate endDate earlier, but keep as fallback
+            const defaultEnd = new Date(startDate);
+            defaultEnd.setFullYear(defaultEnd.getFullYear() + DEFAULT_RECURRENCE_YEARS);
+            untilDate = DateUtils.endOfDay(defaultEnd);
+          }
+          rrule += `;UNTIL=${this.formatIcalDate(untilDate)}`;
+          
+          return rrule;
+        },
+        
+        // Export events to iCal format
+        export() {
+          if (!Array.isArray(eventsData) || eventsData.length === 0) {
+            return;
+          }
+          
+          let ical = 'BEGIN:VCALENDAR\r\n';
+      ical += 'VERSION:2.0\r\n';
+      ical += 'PRODID:-//AZ Acoustic Collective//Calendar//EN\r\n';
+      ical += 'CALSCALE:GREGORIAN\r\n';
+      ical += 'METHOD:PUBLISH\r\n';
+      
+          eventsData.forEach(event => {
+            // Use startDate for recurrent events, fallback to event.date
+            const eventStartDate = event.startDate 
+              ? DateUtils.parseDateString(event.startDate)
+              : DateUtils.parseDateString(event.date);
+            const startDateStr = this.formatIcalDate(eventStartDate);
+            const endDate = new Date(eventStartDate);
+        endDate.setHours(endDate.getHours() + 2); // Default 2 hour event
+            const endDateStr = this.formatIcalDate(endDate);
+            
+            const eventDateOnly = DateUtils.formatDateString(eventStartDate);
+            const isEventCancelled = EventProcessor.isDateCancelled(event, eventDateOnly);
+        
+        if (event.recurrence) {
+              // Recurring event
+              const rrule = this.generateRRule(event, eventStartDate);
+              
+              ical += 'BEGIN:VEVENT\r\n';
+              ical += `UID:${event.url.replace(/[^a-zA-Z0-9]/g, '')}@azacoustic.org\r\n`;
+              ical += `DTSTART:${startDateStr}\r\n`;
+              ical += `DTEND:${endDateStr}\r\n`;
+              ical += `RRULE:${rrule}\r\n`;
+          
+          // Add EXDATE for cancelled dates
+          if (event.cancelledDates && Array.isArray(event.cancelledDates)) {
+                event.cancelledDates.forEach(cancelledDateStr => {
+                  const cancelledDate = DateUtils.parseDateString(cancelledDateStr);
+                  const exdateStr = this.formatIcalDate(cancelledDate);
+              ical += `EXDATE:${exdateStr}\r\n`;
+            });
+          }
+          
+              ical += `SUMMARY:${this.escapeIcal(event.title)}\r\n`;
+          if (event.description) {
+                ical += `DESCRIPTION:${this.escapeIcal(event.description)}\r\n`;
+          }
+          ical += `URL:${window.location.origin}${event.url}\r\n`;
+          ical += 'END:VEVENT\r\n';
+        } else {
+              // One-off event - skip if cancelled
+              if (isEventCancelled) {
+                return;
+          }
+          
+          ical += 'BEGIN:VEVENT\r\n';
+          ical += `UID:${event.url.replace(/[^a-zA-Z0-9]/g, '')}@azacoustic.org\r\n`;
+              ical += `DTSTART:${startDateStr}\r\n`;
+          ical += `DTEND:${endDateStr}\r\n`;
+              ical += `SUMMARY:${this.escapeIcal(event.title)}\r\n`;
+          if (event.description) {
+                ical += `DESCRIPTION:${this.escapeIcal(event.description)}\r\n`;
+          }
+          ical += `URL:${window.location.origin}${event.url}\r\n`;
+          ical += 'END:VEVENT\r\n';
+        }
+      });
+      
+      ical += 'END:VCALENDAR';
+      
+          // Download file
+      const blob = new Blob([ical], { type: 'text/calendar;charset=utf-8' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'azacoustic-calendar.ics';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+        }
+      };
+      
+      // ============================================================================
+      // Event Handlers
+      // ============================================================================
+      const setupEventHandlers = () => {
+        // Previous month button
+        document.getElementById('prev-month').addEventListener('click', () => {
+          currentViewDate.setMonth(currentViewDate.getMonth() - 1);
+          CalendarRenderer.render();
+        });
+        
+        // Next month button
+        document.getElementById('next-month').addEventListener('click', () => {
+          currentViewDate.setMonth(currentViewDate.getMonth() + 1);
+          CalendarRenderer.render();
+        });
+        
+        // Export iCal button
+        document.getElementById('export-ical').addEventListener('click', () => {
+          ICalExporter.export();
+        });
+      };
+      
+      // ============================================================================
+      // Initialization
+      // ============================================================================
+      const init = () => {
+        // Ensure calendar grid exists
+        const grid = document.getElementById('calendar-grid');
+        if (!grid) {
+          return;
+        }
+        
+        setupEventHandlers();
+        CalendarRenderer.render();
+      };
+      
+      // Initialize when DOM is ready
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+      } else {
+        init();
+      }
+    })();
+  </script>
+</div>
+{{ end }}

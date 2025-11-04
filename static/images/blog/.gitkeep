@@ -1,0 +1,9 @@
+# Blog Images
+
+Place blog post cover images in this directory.
+
+Reference them in your blog post front matter as:
+```yaml
+coverImage: "/images/blog/your-image.jpg"
+```
+

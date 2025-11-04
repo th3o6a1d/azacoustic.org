@@ -1,0 +1,35 @@
+baseURL: "https://azacoustic.org"
+languageCode: "en-us"
+title: "AZ Acoustic Collective"
+theme: "azacoustic"
+
+menu:
+  main:
+    - identifier: home
+      name: Home
+      url: /
+      weight: 10
+    - identifier: about
+      name: About
+      url: /about/
+      weight: 20
+    - identifier: jams
+      name: Jams
+      url: /jams/
+      weight: 30
+    - identifier: calendar
+      name: Calendar
+      url: /calendar/
+      weight: 40
+    - identifier: events
+      name: Events
+      url: /events/
+      weight: 50
+    - identifier: blog
+      name: Blog
+      url: /blog/
+      weight: 60
+
+params:
+  description: "A musician collective in Phoenix, AZ, specializing in bluegrass, folk, and old time music"
+  tagline: "Bluegrass, Folk & Old Time Music in Phoenix, AZ"

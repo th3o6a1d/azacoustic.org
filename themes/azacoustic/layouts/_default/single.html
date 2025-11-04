@@ -1,0 +1,24 @@
+{{ define "main" }}
+<article class="single-post">
+  <header class="post-header">
+    {{ if .Params.coverImage }}
+    <div class="cover-image">
+      <img src="{{ .Params.coverImage }}" alt="{{ .Title }}" />
+    </div>
+    {{ end }}
+    <h1>{{ .Title }}</h1>
+    {{ if .Params.description }}
+    <p class="description">{{ .Params.description }}</p>
+    {{ end }}
+    <div class="post-meta">
+      {{ if not .Params.hideDate }}
+      <time datetime="{{ .Date.Format "2006-01-02" }}">{{ .Date.Format "January 2, 2006" }}</time>
+      {{ end }}
+    </div>
+  </header>
+  <div class="post-content">
+    {{ .Content }}
+  </div>
+</article>
+{{ end }}
+

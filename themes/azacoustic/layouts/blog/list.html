@@ -1,0 +1,37 @@
+{{ define "main" }}
+<div class="list-page">
+  <h1>{{ .Title }}</h1>
+  {{ if .Content }}
+  <div class="page-content">
+    {{ .Content }}
+  </div>
+  {{ end }}
+  
+  {{ if eq .Section "blog" }}
+  <div class="blog-list">
+    {{ range where .Pages "Draft" false }}
+    <article class="blog-card">
+      {{ if .Params.coverImage }}
+      <div class="blog-cover">
+        <a href="{{ .Permalink }}">
+          <img src="{{ .Params.coverImage }}" alt="{{ .Title }}" />
+        </a>
+      </div>
+      {{ end }}
+      <div class="blog-content">
+        <h2><a href="{{ .Permalink }}">{{ .Title }}</a></h2>
+        {{ if .Params.description }}
+        <p class="blog-description">{{ .Params.description }}</p>
+        {{ end }}
+        <div class="blog-meta">
+          <time datetime="{{ .Date.Format "2006-01-02" }}">{{ .Date.Format "January 2, 2006" }}</time>
+        </div>
+        <a href="{{ .Permalink }}" class="read-more">Read more →</a>
+      </div>
+    </article>
+    {{ end }}
+  </div>
+  {{ end }}
+</div>
+{{ end }}
+
