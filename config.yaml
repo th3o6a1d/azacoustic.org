@@ -29,6 +29,10 @@ menu:
       name: Blog
       url: /blog/
       weight: 60
+    - identifier: contact
+      name: Contact
+      url: /contact/
+      weight: 70
 
 params:
   description: "A musician collective in Phoenix, AZ, specializing in bluegrass, folk, and old time music"
